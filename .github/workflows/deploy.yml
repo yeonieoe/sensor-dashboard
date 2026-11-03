@@ -24,6 +24,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${VITE_SUPABASE_URL}" ] || [ -z "${VITE_SUPABASE_ANON_KEY}" ]; then
+            echo "Missing required GitHub Secrets: VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY"
+            exit 1
+          fi
+          echo "Supabase URL is configured: ${VITE_SUPABASE_URL:0:20}..."
+          echo "Supabase anon key is configured: ${VITE_SUPABASE_ANON_KEY:0:8}..."
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

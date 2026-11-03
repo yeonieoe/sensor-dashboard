@@ -184,68 +184,112 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!supabase) {
+    if (!supabaseUrl || !supabaseAnonKey) {
       setErrorMessage(
-        "VITE_SUPABASE_URL 또는 VITE_SUPABASE_ANON_KEY가 .env에 없습니다.",
+        "Supabase 환경 변수가 비어 있습니다. GitHub Pages 배포용 VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY를 확인하세요.",
       )
       return
     }
 
+    if (!supabase) {
+      setErrorMessage("Supabase 클라이언트를 초기화하지 못했습니다.")
+      return
+    }
+
     let channel: RealtimeChannel | null = null
+    let isMounted = true
 
     const loadRecentValues = async () => {
-      const { data, error } = await supabase
-        .from("readings")
-        .select("value")
-        .order("id", { ascending: false })
-        .limit(MAX_HISTORY)
+      try {
+        const { data, error } = await supabase
+          .from("readings")
+          .select("value")
+          .order("id", { ascending: false })
+          .limit(MAX_HISTORY)
 
-      if (error) {
-        setErrorMessage(`Supabase 연결 오류: ${error.message}`)
-        return
-      }
+        if (error) {
+          throw error
+        }
 
-      const values = (data ?? [])
-        .map((row) => Number((row as { value?: number | string }).value))
-        .filter(Number.isFinite)
-        .reverse()
+        const values = (data ?? [])
+          .map((row) => Number((row as { value?: number | string }).value))
+          .filter(Number.isFinite)
+          .reverse()
 
-      if (values.length === 0) {
-        setHistory(DEFAULT_VALUES)
-        setLatestValue(DEFAULT_VALUES[DEFAULT_VALUES.length - 1])
+        if (!isMounted) {
+          return
+        }
+
+        if (values.length === 0) {
+          setHistory(DEFAULT_VALUES)
+          setLatestValue(DEFAULT_VALUES[DEFAULT_VALUES.length - 1])
+          setLastUpdated(new Date())
+          return
+        }
+
+        const recent = values.slice(-MAX_HISTORY)
+        setHistory(recent)
+        setLatestValue(recent[recent.length - 1])
         setLastUpdated(new Date())
-        return
-      }
+        setErrorMessage("")
+      } catch (error) {
+        if (!isMounted) {
+          return
+        }
 
-      const recent = values.slice(-MAX_HISTORY)
-      setHistory(recent)
-      setLatestValue(recent[recent.length - 1])
-      setLastUpdated(new Date())
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Supabase 데이터 로드에 실패했습니다."
+        setErrorMessage(`Supabase 연결 오류: ${message}`)
+      }
     }
 
     void loadRecentValues()
 
-    channel = supabase
-      .channel("readings-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "readings",
-        },
-        (payload) => {
-          const nextValue = Number((payload.new as { value?: number | string })?.value)
-          if (!Number.isFinite(nextValue)) {
-            return
-          }
+    try {
+      channel = supabase
+        .channel("readings-live")
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "readings",
+          },
+          (payload) => {
+            const nextValue = Number((payload.new as { value?: number | string })?.value)
+            if (!Number.isFinite(nextValue)) {
+              return
+            }
 
-          updateFromSupabaseValue(nextValue)
-        },
-      )
-      .subscribe()
+            updateFromSupabaseValue(nextValue)
+            setErrorMessage("")
+          },
+        )
+
+      void channel.subscribe((status, err) => {
+        if (status === "SUBSCRIBED") {
+          setErrorMessage("")
+          return
+        }
+
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setErrorMessage(
+            err
+              ? `Supabase Realtime 구독 실패: ${err.message}`
+              : "Supabase Realtime 구독에 실패했습니다. Supabase 프로젝트 상태와 RLS를 확인하세요.",
+          )
+        }
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Supabase Realtime 구독을 시작할 수 없습니다."
+      setErrorMessage(`Supabase 구독 오류: ${message}`)
+    }
 
     return () => {
+      isMounted = false
       if (channel) {
         void supabase.removeChannel(channel)
       }
