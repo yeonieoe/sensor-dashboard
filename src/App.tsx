@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 
 const MAX_HISTORY = 100
 const DEFAULT_VALUES = [
   2.31, 2.36, 2.34, 2.4, 2.42, 2.39, 2.43, 2.45, 2.41, 2.44, 2.43, 2.43,
 ]
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const supabase =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { persistSession: false },
+      })
+    : null
 
 function PulseIcon() {
   return (
@@ -66,6 +76,15 @@ export default function App() {
 
   const updateFromSerialValue = (value: number) => {
     setHistory((prev) => [...prev, value].slice(-MAX_HISTORY))
+    setLatestValue(value)
+    setLastUpdated(new Date())
+  }
+
+  const updateFromSupabaseValue = (value: number) => {
+    setHistory((prev) => {
+      const next = [...prev, value].slice(-MAX_HISTORY)
+      return next
+    })
     setLatestValue(value)
     setLastUpdated(new Date())
   }
@@ -165,7 +184,71 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!supabase) {
+      setErrorMessage(
+        "VITE_SUPABASE_URL 또는 VITE_SUPABASE_ANON_KEY가 .env에 없습니다.",
+      )
+      return
+    }
+
+    let channel: RealtimeChannel | null = null
+
+    const loadRecentValues = async () => {
+      const { data, error } = await supabase
+        .from("readings")
+        .select("value")
+        .order("id", { ascending: false })
+        .limit(MAX_HISTORY)
+
+      if (error) {
+        setErrorMessage(`Supabase 연결 오류: ${error.message}`)
+        return
+      }
+
+      const values = (data ?? [])
+        .map((row) => Number((row as { value?: number | string }).value))
+        .filter(Number.isFinite)
+        .reverse()
+
+      if (values.length === 0) {
+        setHistory(DEFAULT_VALUES)
+        setLatestValue(DEFAULT_VALUES[DEFAULT_VALUES.length - 1])
+        setLastUpdated(new Date())
+        return
+      }
+
+      const recent = values.slice(-MAX_HISTORY)
+      setHistory(recent)
+      setLatestValue(recent[recent.length - 1])
+      setLastUpdated(new Date())
+    }
+
+    void loadRecentValues()
+
+    channel = supabase
+      .channel("readings-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "readings",
+        },
+        (payload) => {
+          const nextValue = Number((payload.new as { value?: number | string })?.value)
+          if (!Number.isFinite(nextValue)) {
+            return
+          }
+
+          updateFromSupabaseValue(nextValue)
+        },
+      )
+      .subscribe()
+
     return () => {
+      if (channel) {
+        void supabase.removeChannel(channel)
+      }
       void stopSerialConnection()
     }
   }, [])
