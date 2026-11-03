@@ -1,24 +1,9 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
-type Range = "1시간" | "6시간" | "24시간"
-
-const series: Record<Range, number[]> = {
-  "1시간": [
-    2.31, 2.36, 2.34, 2.4, 2.42, 2.39, 2.43, 2.45, 2.41, 2.44, 2.43, 2.43,
-  ],
-  "6시간": [
-    2.18, 2.21, 2.25, 2.22, 2.29, 2.35, 2.32, 2.38, 2.41, 2.39, 2.44, 2.43,
-  ],
-  "24시간": [
-    2.22, 2.17, 2.24, 2.31, 2.28, 2.35, 2.42, 2.37, 2.46, 2.4, 2.44, 2.43,
-  ],
-}
-
-const rangeLabels: Record<Range, string[]> = {
-  "1시간": ["13:30", "13:40", "13:50", "14:00", "14:10", "14:20", "14:30"],
-  "6시간": ["08:30", "09:30", "10:30", "11:30", "12:30", "13:30", "14:30"],
-  "24시간": ["어제 15시", "19시", "23시", "오늘 03시", "07시", "11시", "14시"],
-}
+const MAX_HISTORY = 100
+const DEFAULT_VALUES = [
+  2.31, 2.36, 2.34, 2.4, 2.42, 2.39, 2.43, 2.45, 2.41, 2.44, 2.43, 2.43,
+]
 
 function PulseIcon() {
   return (
@@ -66,31 +51,163 @@ function CheckIcon() {
 }
 
 export default function App() {
-  const [range, setRange] = useState<Range>("6시간")
-  const values = series[range]
+  const [history, setHistory] = useState<number[]>(DEFAULT_VALUES)
+  const [latestValue, setLatestValue] = useState<number>(
+    DEFAULT_VALUES[DEFAULT_VALUES.length - 1],
+  )
+  const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState(new Date())
+  const [errorMessage, setErrorMessage] = useState("")
+
+  const portRef = useRef<any>(null)
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
+  const bufferRef = useRef("")
+
+  const updateFromSerialValue = (value: number) => {
+    setHistory((prev) => [...prev, value].slice(-MAX_HISTORY))
+    setLatestValue(value)
+    setLastUpdated(new Date())
+  }
+
+  const stopSerialConnection = async () => {
+    const reader = readerRef.current
+    if (reader) {
+      try {
+        await reader.cancel()
+      } catch {
+        // Ignore cancellation errors when closing the port.
+      }
+      try {
+        reader.releaseLock()
+      } catch {
+        // Ignore release-lock errors.
+      }
+      readerRef.current = null
+    }
+
+    const port = portRef.current
+    if (port) {
+      try {
+        await port.close()
+      } catch {
+        // Ignore close errors.
+      }
+      portRef.current = null
+    }
+
+    setIsConnected(false)
+    setIsConnecting(false)
+  }
+
+  const handleIncomingText = (chunk: string) => {
+    const combined = `${bufferRef.current}${chunk}`
+    const parts = combined.split(/\r?\n/)
+    bufferRef.current = parts.pop() ?? ""
+
+    for (const part of parts) {
+      const trimmed = part.trim()
+      if (!trimmed) {
+        continue
+      }
+
+      const numericValue = Number(trimmed)
+      if (!Number.isFinite(numericValue)) {
+        continue
+      }
+
+      updateFromSerialValue(numericValue)
+    }
+  }
+
+  const connectSerial = async () => {
+    if (!("serial" in navigator)) {
+      setErrorMessage("이 브라우저는 Web Serial API를 지원하지 않습니다. Chrome 또는 Edge를 사용하세요.")
+      return
+    }
+
+    setIsConnecting(true)
+    setErrorMessage("")
+
+    try {
+      const port = await navigator.serial.requestPort()
+      await port.open({ baudRate: 9600 })
+
+      portRef.current = port
+      setIsConnected(true)
+      bufferRef.current = ""
+
+      const reader = port.readable.getReader()
+      readerRef.current = reader
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) {
+          break
+        }
+
+        handleIncomingText(decoder.decode(value, { stream: true }))
+      }
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "시리얼 포트 연결에 실패했습니다.",
+      )
+      setIsConnected(false)
+    } finally {
+      setIsConnecting(false)
+      if (portRef.current) {
+        await stopSerialConnection()
+      }
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      void stopSerialConnection()
+    }
+  }, [])
 
   const chart = useMemo(() => {
     const width = 900
     const height = 280
-    const min = 2
-    const max = 2.6
-    const points = values.map((value, index) => ({
-      x: (index / (values.length - 1)) * width,
-      y: height - ((value - min) / (max - min)) * height,
+    const source = history.length > 0 ? history : [latestValue]
+    const minValue = Math.min(...source)
+    const maxValue = Math.max(...source)
+    const rangeValue = Math.max(maxValue - minValue, 0.1)
+    const paddedMin = minValue - rangeValue * 0.2
+    const paddedMax = maxValue + rangeValue * 0.2
+
+    const points = source.map((value, index) => ({
+      x:
+        source.length === 1
+          ? width / 2
+          : (index / (source.length - 1)) * width,
+      y:
+        height -
+        ((value - paddedMin) / (paddedMax - paddedMin || 1)) * height,
       value,
     }))
+
     const line = points
       .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
       .join(" ")
     const area = `${line} L ${width} ${height} L 0 ${height} Z`
-    return { width, height, points, line, area }
-  }, [values])
+    const labels = [0, 1, 2, 3].map((item) => {
+      const value = paddedMax - ((paddedMax - paddedMin) / 3) * item
+      return value.toFixed(2)
+    })
+
+    return { width, height, points, line, area, labels }
+  }, [history, latestValue])
 
   const average = (
-    values.reduce((sum, value) => sum + value, 0) / values.length
+    history.reduce((sum, value) => sum + value, 0) / history.length
   ).toFixed(2)
-  const minimum = Math.min(...values).toFixed(2)
-  const maximum = Math.max(...values).toFixed(2)
+  const minimum = Math.min(...history).toFixed(2)
+  const maximum = Math.max(...history).toFixed(2)
 
   return (
     <main className="min-h-screen bg-[#f5f7f9] text-[#182228]">
@@ -107,14 +224,54 @@ export default function App() {
               <p className="mt-0.5 text-xs text-[#718087]">PRESSURE MONITOR</p>
             </div>
           </div>
-          <div className="flex items-center gap-2.5 rounded-full border border-[#dce7e3] bg-[#f7fbf9] py-2 pl-2.5 pr-4">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#2a9d78] opacity-40" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#23866b]" />
-            </span>
-            <span className="text-xs font-semibold text-[#286b5c]">
-              센서 연결됨
-            </span>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                if (isConnected || isConnecting) {
+                  void stopSerialConnection()
+                  return
+                }
+                void connectSerial()
+              }}
+              disabled={isConnecting}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${
+                isConnected
+                  ? "bg-[#e8f6f1] text-[#185f51] ring-1 ring-[#b8dfd0]"
+                  : "bg-[#166b59] text-white shadow-[0_8px_20px_rgba(22,107,89,0.2)]"
+              } ${isConnecting ? "cursor-wait opacity-80" : ""}`}
+            >
+              {isConnecting ? "연결 중..." : isConnected ? "시리얼 해제" : "시리얼 연결"}
+            </button>
+
+            <div
+              className={`flex items-center gap-2.5 rounded-full border py-2 pl-2.5 pr-4 ${
+                isConnected
+                  ? "border-[#dce7e3] bg-[#f7fbf9]"
+                  : "border-[#e8d9d7] bg-[#fff7f5]"
+              }`}
+            >
+              <span className="relative flex h-2.5 w-2.5">
+                <span
+                  className={`absolute inline-flex h-full w-full rounded-full opacity-40 ${
+                    isConnected ? "animate-ping bg-[#2a9d78]" : "bg-[#d9745c]"
+                  }`}
+                />
+                <span
+                  className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
+                    isConnected ? "bg-[#23866b]" : "bg-[#cf725d]"
+                  }`}
+                />
+              </span>
+              <span
+                className={`text-xs font-semibold ${
+                  isConnected ? "text-[#286b5c]" : "text-[#9b5d52]"
+                }`}
+              >
+                {isConnected ? "센서 연결됨" : "연결 대기"}
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -130,29 +287,35 @@ export default function App() {
             </h2>
           </div>
           <p className="text-sm text-[#728087]">
-            마지막 업데이트 · 오늘 14:32:08
+            마지막 업데이트 · {lastUpdated.toLocaleTimeString("ko-KR", { hour12: false })}
           </p>
         </div>
+
+        {errorMessage ? (
+          <div className="mb-5 rounded-xl border border-[#f0d8d0] bg-[#fff5f3] px-4 py-3 text-sm text-[#8a4d3d]">
+            {errorMessage}
+          </div>
+        ) : null}
 
         <section className="grid gap-5 lg:grid-cols-[minmax(300px,0.8fr)_minmax(0,2.2fr)]">
           <article className="relative overflow-hidden rounded-[22px] bg-[#145d50] p-7 text-white shadow-[0_18px_45px_rgba(20,75,65,0.18)] sm:p-8">
             <div className="absolute -right-16 -top-14 h-52 w-52 rounded-full border-[38px] border-white/[0.035]" />
             <div className="absolute -bottom-24 -left-20 h-64 w-64 rounded-full bg-[#1b7462] opacity-70 blur-2xl" />
             <div className="relative flex min-h-[340px] flex-col">
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-white/65">현재 압력</p>
                   <p className="mt-1 text-xs text-white/45">PRESSURE 01</p>
                 </div>
                 <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-[#c4f1df]">
-                  정상 범위
+                  {isConnected ? "실시간 모니터링" : "대기 중"}
                 </span>
               </div>
 
               <div className="my-auto py-9">
                 <div className="flex items-end gap-3">
                   <strong className="text-[72px] font-semibold leading-none tracking-[-0.065em] sm:text-[84px]">
-                    2.43
+                    {Number.isFinite(latestValue) ? latestValue.toFixed(2) : "--"}
                   </strong>
                   <span className="mb-2 text-xl font-medium text-white/60">
                     bar
@@ -160,8 +323,12 @@ export default function App() {
                 </div>
                 <div className="mt-5 flex w-fit items-center gap-1.5 rounded-lg bg-[#257563] px-2.5 py-1.5 text-xs font-semibold text-[#d9fff1]">
                   <ArrowUpRightIcon />
-                  <span>0.03 bar</span>
-                  <span className="font-normal text-white/55">지난 10분</span>
+                  <span>
+                    {history.length > 1
+                      ? `${(latestValue - history[Math.max(history.length - 2, 0)]).toFixed(2)} bar`
+                      : "0.00 bar"}
+                  </span>
+                  <span className="font-normal text-white/55">최근 값</span>
                 </div>
               </div>
 
@@ -173,7 +340,10 @@ export default function App() {
                   </span>
                 </div>
                 <div className="relative h-1.5 overflow-hidden rounded-full bg-black/20">
-                  <div className="h-full w-[61%] rounded-full bg-[#78dcb8]" />
+                  <div
+                    className="h-full rounded-full bg-[#78dcb8]"
+                    style={{ width: `${Math.min(Math.max((latestValue / 3) * 100, 10), 100)}%` }}
+                  />
                   <span className="absolute right-[38%] top-1/2 h-3 w-1 -translate-y-1/2 rounded-full bg-white shadow" />
                 </div>
               </div>
@@ -184,33 +354,20 @@ export default function App() {
             <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
               <div>
                 <h3 className="text-lg font-bold tracking-[-0.025em]">
-                  압력 변화 추이
+                  실시간 압력 변화
                 </h3>
                 <p className="mt-1.5 text-sm text-[#78868c]">
-                  시간에 따른 센서 측정값
+                  최근 100개 데이터 포인트
                 </p>
               </div>
-              <div className="flex w-fit rounded-lg bg-[#f1f4f5] p-1">
-                {(Object.keys(series) as Range[]).map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setRange(item)}
-                    className={`rounded-md px-3.5 py-2 text-xs font-semibold transition-all ${
-                      range === item
-                        ? "bg-white text-[#185f51] shadow-sm"
-                        : "text-[#7a888e] hover:text-[#39474d]"
-                    }`}
-                  >
-                    {item}
-                  </button>
-                ))}
+              <div className="rounded-lg bg-[#f1f4f5] px-3 py-2 text-xs font-semibold text-[#185f51]">
+                최근 100개
               </div>
             </div>
 
             <div className="flex min-h-[290px]">
               <div className="flex w-12 shrink-0 flex-col justify-between pb-7 pr-3 text-right text-[11px] text-[#89969b]">
-                {["2.6", "2.4", "2.2", "2.0"].map((label) => (
+                {chart.labels.map((label) => (
                   <span key={label}>{label}</span>
                 ))}
               </div>
@@ -229,7 +386,7 @@ export default function App() {
                     preserveAspectRatio="none"
                     className="absolute inset-0 h-full w-full overflow-visible"
                     role="img"
-                    aria-label={`${range} 동안의 압력 변화 선 그래프`}
+                    aria-label="최근 100개 압력 변화 그래프"
                   >
                     <defs>
                       <linearGradient
@@ -262,7 +419,7 @@ export default function App() {
                       vectorEffect="non-scaling-stroke"
                     />
                     {chart.points.map((point, index) => (
-                      <g key={`${range}-${index}`}>
+                      <g key={`point-${index}`}>
                         <circle
                           cx={point.x}
                           cy={point.y}
@@ -287,13 +444,8 @@ export default function App() {
                   </svg>
                 </div>
                 <div className="mt-3 flex justify-between text-[10px] text-[#89969b] sm:text-[11px]">
-                  {rangeLabels[range].map((label, index) => (
-                    <span
-                      key={label}
-                      className={index % 2 === 1 ? "hidden sm:inline" : ""}
-                    >
-                      {label}
-                    </span>
+                  {["0", "25", "50", "75", "100"].map((label) => (
+                    <span key={label}>{label}</span>
                   ))}
                 </div>
               </div>
@@ -303,9 +455,9 @@ export default function App() {
 
         <section className="mt-5 grid gap-4 sm:grid-cols-3">
           {[
-            { label: "평균 압력", value: average, note: `${range} 기준` },
-            { label: "최저 압력", value: minimum, note: "안전 범위 내" },
-            { label: "최고 압력", value: maximum, note: "안전 범위 내" },
+            { label: "평균 압력", value: average, note: "최근 100개 기준" },
+            { label: "최저 압력", value: minimum, note: "최근 100개 기준" },
+            { label: "최고 압력", value: maximum, note: "최근 100개 기준" },
           ].map((stat) => (
             <article
               key={stat.label}
