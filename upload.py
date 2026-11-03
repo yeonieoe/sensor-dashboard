@@ -13,8 +13,8 @@ def load_supabase_config() -> tuple[str, str]:
     env_path = Path(__file__).resolve().parent / ".env"
     load_dotenv(dotenv_path=env_path)
 
-    url = os.getenv("VITE_SUPABASE_URL")
-    key = os.getenv("VITE_SUPABASE_ANON_KEY")
+    url = (os.getenv("VITE_SUPABASE_URL") or "").strip()
+    key = (os.getenv("VITE_SUPABASE_ANON_KEY") or "").strip()
 
     if not url or not key:
         raise RuntimeError(

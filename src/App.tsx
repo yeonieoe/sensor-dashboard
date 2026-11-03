@@ -6,8 +6,9 @@ const DEFAULT_VALUES = [
   2.31, 2.36, 2.34, 2.4, 2.42, 2.39, 2.43, 2.45, 2.41, 2.44, 2.43, 2.43,
 ]
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const normalizeEnvValue = (value: string | undefined) => (value ?? "").trim()
+const supabaseUrl = normalizeEnvValue(import.meta.env.VITE_SUPABASE_URL)
+const supabaseAnonKey = normalizeEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY)
 const supabase =
   supabaseUrl && supabaseAnonKey
     ? createClient(supabaseUrl, supabaseAnonKey, {
@@ -198,6 +199,14 @@ export default function App() {
 
     let channel: RealtimeChannel | null = null
     let isMounted = true
+    let pollingTimer: number | null = null
+
+    const stopPolling = () => {
+      if (pollingTimer !== null) {
+        window.clearInterval(pollingTimer)
+        pollingTimer = null
+      }
+    }
 
     const loadRecentValues = async () => {
       try {
@@ -245,6 +254,13 @@ export default function App() {
       }
     }
 
+    const startPolling = () => {
+      stopPolling()
+      pollingTimer = window.setInterval(() => {
+        void loadRecentValues()
+      }, 1000)
+    }
+
     void loadRecentValues()
 
     try {
@@ -265,31 +281,37 @@ export default function App() {
 
             updateFromSupabaseValue(nextValue)
             setErrorMessage("")
+            stopPolling()
           },
         )
 
       void channel.subscribe((status, err) => {
         if (status === "SUBSCRIBED") {
           setErrorMessage("")
+          stopPolling()
           return
         }
 
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          setErrorMessage(
+          const fallbackMessage =
             err
-              ? `Supabase Realtime 구독 실패: ${err.message}`
-              : "Supabase Realtime 구독에 실패했습니다. Supabase 프로젝트 상태와 RLS를 확인하세요.",
-          )
+              ? `Supabase Realtime 구독 실패: ${err.message}. 1초마다 최신 데이터를 다시 불러옵니다.`
+              : "Supabase Realtime 구독에 실패했습니다. 1초마다 최신 데이터를 다시 불러옵니다."
+
+          setErrorMessage(fallbackMessage)
+          startPolling()
         }
       })
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Supabase Realtime 구독을 시작할 수 없습니다."
       setErrorMessage(`Supabase 구독 오류: ${message}`)
+      startPolling()
     }
 
     return () => {
       isMounted = false
+      stopPolling()
       if (channel) {
         void supabase.removeChannel(channel)
       }
