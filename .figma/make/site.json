@@ -1,0 +1,10 @@
+{
+  "description": "실시간 압력센서 값을 크게 표시하고 시간별 변화를 그래프로 확인할 수 있는 대시보드로, 센서 상태를 한눈에 파악하도록 돕습니다.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
