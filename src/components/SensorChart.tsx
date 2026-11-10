@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Reading } from '../lib/device'
-import { SENSOR_MAX } from '../product'
+import { SENSOR_MAX, SENSOR_MIN } from '../product'
 
 type Props = {
   readings: Reading[]
@@ -8,6 +8,11 @@ type Props = {
 
 const HEIGHT = 200
 const PADDING = { left: 40, right: 8, top: 8, bottom: 20 }
+const toPercent = (value: number) =>
+  Math.round(
+    Math.min(1, Math.max(0, (value - SENSOR_MIN) / (SENSOR_MAX - SENSOR_MIN))) *
+      100,
+  )
 
 export default function SensorChart({ readings }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -33,12 +38,13 @@ export default function SensorChart({ readings }: Props) {
       const x =
         PADDING.left +
         (readings.length < 2 ? plotWidth : (index / (readings.length - 1)) * plotWidth)
-      const ratio = Math.min(1, Math.max(0, reading.value / SENSOR_MAX))
+      const ratio = toPercent(reading.value) / 100
       const y = PADDING.top + plotHeight - ratio * plotHeight
       return `${x},${y}`
     })
     .join(' ')
   const current = readings.at(-1)?.value
+  const currentPercent = current === undefined ? undefined : toPercent(current)
 
   return (
     <section className="chart-section" aria-label="실시간 센서값">
@@ -52,10 +58,10 @@ export default function SensorChart({ readings }: Props) {
             height={HEIGHT}
             viewBox={`0 0 ${width} ${HEIGHT}`}
             role="img"
-            aria-label={`센서값 추이, 현재 ${current?.toLocaleString('ko-KR')}`}
+            aria-label={`센서값 추이, 현재 ${currentPercent}%`}
           >
-            {[SENSOR_MAX, SENSOR_MAX / 2, 0].map((tick) => {
-              const ratio = tick / SENSOR_MAX
+            {[100, 50, 0].map((tick) => {
+              const ratio = tick / 100
               const y = PADDING.top + plotHeight - ratio * plotHeight
 
               return (
@@ -68,7 +74,7 @@ export default function SensorChart({ readings }: Props) {
                     className="chart-grid-line"
                   />
                   <text x={PADDING.left - PADDING.right} y={y + 4} className="chart-label">
-                    {tick.toLocaleString('ko-KR')}
+                    {tick}%
                   </text>
                 </g>
               )

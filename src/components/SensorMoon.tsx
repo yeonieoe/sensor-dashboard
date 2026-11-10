@@ -33,9 +33,7 @@ export default function SensorMoon({ value, power }: Props) {
       >
         <img src={moonImage} alt="" />
       </div>
-      <p className="t-value sensor-value">
-        {value === undefined ? '—' : value.toLocaleString('ko-KR')}
-      </p>
+      <p className="t-value sensor-value">{value === undefined ? '—' : `${brightness}%`}</p>
     </section>
   )
 }

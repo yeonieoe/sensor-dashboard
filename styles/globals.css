@@ -8,8 +8,8 @@
 
 :root {
   /* 학생 슬롯: 메인 컬러 (기본값 블루) */
-  --brand: #2f5bff;
-  --on-brand: #ffffff;
+  --brand: #FF8A3D;
+  --on-brand: #000000;
   /* 학생 슬롯: 폰트 (메인, 서브) */
   --font-sans: Pretendard, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
   --font-display: "Rising CHAI", Pretendard, -apple-system, sans-serif;
@@ -19,7 +19,7 @@
   --ink-muted: #9a9ea7;
   --line: #2a2d33;
   --off: #5d6169;
-  --moon-glow: #9db8ff;
+  --moon-glow: #FFB070;
   --status-on: #4cc38a;
   --danger: #f97066;
 
