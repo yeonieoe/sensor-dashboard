@@ -14,7 +14,7 @@ type ConnectOptions = {
 let channel: RealtimeChannel | null = null
 let pollingTimer: number | null = null
 let demoTimer: number | null = null
-let demoPower = false
+let demoPower = true
 let activeOptions: ConnectOptions | null = null
 let latestTimestamp = ''
 

@@ -20,6 +20,7 @@ export default function SensorMoon({ value, power }: Props) {
         )
   const brightness = Math.round(level * 100)
   const label = power ? `달 밝기 ${brightness}%` : '달 꺼짐'
+  const moonImage = `${import.meta.env.BASE_URL}images/moon.webp`
 
   return (
     <section className="moon-section" aria-label="달 상태">
@@ -30,7 +31,7 @@ export default function SensorMoon({ value, power }: Props) {
         role="img"
         aria-label={label}
       >
-        <img src="/images/moon.webp" alt="" />
+        <img src={moonImage} alt="" />
       </div>
       <p className="t-value sensor-value">
         {value === undefined ? '—' : value.toLocaleString('ko-KR')}
